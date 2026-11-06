@@ -49,6 +49,16 @@ impl Database {
         Ok(db)
     }
 
+    #[cfg(test)]
+    pub fn new_in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        let db = Database {
+            conn: Mutex::new(conn),
+        };
+        db.init_tables()?;
+        Ok(db)
+    }
+
     fn init_tables(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
 
@@ -242,5 +252,46 @@ pub fn get_database_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("avida")
         .join("avida.db")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_db_init_and_defaults() {
+        let db = Database::new_in_memory().expect("failed to init in-memory db");
+        let settings = db.get_settings().expect("failed to get settings");
+        assert!(settings.iter().any(|s| s.key == "global_shortcut" && s.value == "Super+Shift+A"));
+        assert!(settings.iter().any(|s| s.key == "active_provider" && s.value == "gemini"));
+    }
+
+    #[test]
+    fn test_workspace_crud() {
+        let db = Database::new_in_memory().expect("failed to init db");
+        let ws = db.add_workspace("Avida Core", "/home/jo/avida", "read_write").expect("failed to add ws");
+        assert_eq!(ws.name, "Avida Core");
+        assert_eq!(ws.path, "/home/jo/avida");
+
+        let list = db.get_workspaces().expect("failed to list ws");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, ws.id);
+
+        db.remove_workspace(&ws.id).expect("failed to remove ws");
+        let list_after = db.get_workspaces().expect("failed to list ws");
+        assert_eq!(list_after.len(), 0);
+    }
+
+    #[test]
+    fn test_activity_logging() {
+        let db = Database::new_in_memory().expect("failed to init db");
+        db.log_activity("command_run", "ls -la", "success").expect("failed to log");
+        db.log_activity("command_run", "cargo build", "pending").expect("failed to log");
+
+        let logs = db.get_activity_logs(10).expect("failed to get logs");
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0].description, "cargo build");
+        assert_eq!(logs[1].description, "ls -la");
+    }
 }
 
